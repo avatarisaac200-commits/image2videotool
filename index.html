@@ -50,7 +50,9 @@ video{display:none;width:100%;margin-top:12px;border-radius:10px;background:#000
 <h2>Options</h2>
 <div class="row">
   <label>Intensity <input id="k" type="range" min="0.2" max="1.6" step="0.05" value="1"></label>
-  <label>Size <select id="q"><option value="4096">Original (up to 4K)</option><option value="1920" selected>1080p</option><option value="1280">720p (fastest)</option></select></label>
+  <label>Format <select id="fmt"><option value="auto">Match image</option><option value="1.7777778" selected>YouTube / landscape 16:9</option><option value="0.5625">Shorts / TikTok / Reels 9:16</option><option value="1">Square 1:1</option><option value="0.8">Instagram portrait 4:5</option></select></label>
+  <label>Image fit <select id="fit"><option value="blur" selected>Fit + blurred background</option><option value="black">Fit + black bars</option><option value="crop">Fill (crop edges)</option></select></label>
+  <label>Size <select id="q"><option value="2160">4K (slow, big)</option><option value="1080" selected>1080p</option><option value="720">720p (fastest)</option></select></label>
   <label>Frame rate <select id="fps"><option value="12">12 fps (fastest)</option><option value="15">15 fps</option><option value="24" selected>24 fps</option><option value="30">30 fps</option></select></label>
   <label>File size <select id="bpp"><option value="0.04">Tiny</option><option value="0.07" selected>Small</option><option value="0.13">Balanced</option><option value="0.25">High quality</option></select></label>
 </div>
@@ -190,16 +192,36 @@ function wire(zone,input,kind){
   zone.ondragleave=()=>zone.classList.remove('over');
   zone.ondrop=e=>{e.preventDefault();zone.classList.remove('over');set(e.dataTransfer.files[0])};
 }
-wire($('dA'),$('fA'),'a');wire($('dI'),$('fI'),'i');$('q').onchange=setup;
+wire($('dA'),$('fA'),'a');wire($('dI'),$('fI'),'i');for(const id of['q','fmt','fit'])$(id).onchange=()=>{$('fit').disabled=$('fmt').value==='auto';setup()};
 
 function setup(){
   if(!bmp)return;
   try{
-    const lim=+$('q').value;
-    const s=Math.min(1,lim/Math.max(bmp.width,bmp.height),Math.sqrt(8294400/(bmp.width*bmp.height)));
-    const W=Math.max(2,Math.floor(bmp.width*s/2)*2),H=Math.max(2,Math.floor(bmp.height*s/2)*2);
+    const S=+$('q').value,fmt=$('fmt').value,fit=$('fit').value;
+    let W,H;
+    if(fmt==='auto'){
+      const s=Math.min(1,S/Math.min(bmp.width,bmp.height),Math.sqrt(8294400/(bmp.width*bmp.height)));
+      W=bmp.width*s;H=bmp.height*s;
+    }else{const a=+fmt;if(a>=1){H=S;W=S*a}else{W=S;H=S/a}}
+    W=Math.max(2,Math.round(W/2)*2);H=Math.max(2,Math.round(H/2)*2);
     const t=document.createElement('canvas');t.width=W;t.height=H;
-    const x=t.getContext('2d');x.imageSmoothingQuality='high';x.drawImage(bmp,0,0,W,H);
+    const x=t.getContext('2d');x.imageSmoothingQuality='high';
+    if(fmt==='auto'){x.drawImage(bmp,0,0,W,H)}
+    else{
+      const cover=Math.max(W/bmp.width,H/bmp.height),contain=Math.min(W/bmp.width,H/bmp.height);
+      const put=k=>x.drawImage(bmp,(W-bmp.width*k)/2,(H-bmp.height*k)/2,bmp.width*k,bmp.height*k);
+      if(fit==='crop')put(cover);
+      else{
+        if(fit==='blur'){
+          const b=document.createElement('canvas');b.width=Math.max(2,Math.round(W/32));b.height=Math.max(2,Math.round(H/32));
+          const bx=b.getContext('2d');bx.imageSmoothingQuality='high';
+          const kb=Math.max(b.width/bmp.width,b.height/bmp.height);
+          bx.drawImage(bmp,(b.width-bmp.width*kb)/2,(b.height-bmp.height*kb)/2,bmp.width*kb,bmp.height*kb);
+          x.drawImage(b,0,0,W,H);x.fillStyle='rgba(0,0,0,.4)';x.fillRect(0,0,W,H);
+        }else{x.fillStyle='#000';x.fillRect(0,0,W,H)}
+        put(contain);
+      }
+    }
     srcFull=t;
     const ps=Math.min(1,960/Math.max(W,H)),p=document.createElement('canvas');
     p.width=Math.max(2,Math.round(W*ps));p.height=Math.max(2,Math.round(H*ps));
