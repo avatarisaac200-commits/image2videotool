@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MP3 + Image → Video Studio</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--card:#f4f4f6;--bd:#d9d9de;--ac:#4f46e5;--ok:#0a7d3c;--er:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#eee;--mut:#999;--card:#1e1e22;--bd:#33333a;--ac:#8b85ff;--ok:#4ade80;--er:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:flex;justify-content:center;padding:24px}
+main{width:100%;max-width:680px}
+h1{font-size:1.4rem;margin:0 0 4px}
+p.s{color:var(--mut);margin:0 0 20px}
+h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:20px 0 8px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:520px){.grid{grid-template-columns:1fr}}
+.drop{background:var(--card);border:2px dashed var(--bd);border-radius:12px;padding:16px;text-align:center;cursor:pointer;min-height:130px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;overflow:hidden}
+.drop.over,.drop:hover{border-color:var(--ac)}
+.drop img{max-width:100%;max-height:90px;border-radius:6px}
+.drop b{word-break:break-all;font-size:.9rem}
+.drop small{color:var(--mut)}
+#pvw{display:none;width:100%;border-radius:10px;background:#000;margin-top:14px;max-height:60vh;object-fit:contain}
+.chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.chip{padding:10px 8px;border:2px solid var(--bd);background:var(--card);color:var(--fg);border-radius:10px;cursor:pointer;font-size:.9rem;margin:0;width:auto;font-weight:500}
+.chip.on{border-color:var(--ac);color:var(--ac);font-weight:700}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.row label{display:flex;flex-direction:column;font-size:.8rem;color:var(--mut);gap:4px;flex:1;min-width:120px}
+select,input[type=range]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--fg);font-size:1rem}
+#go{margin-top:18px;width:100%;padding:13px;font-size:1rem;border:0;border-radius:10px;background:var(--ac);color:#fff;cursor:pointer;font-weight:600}
+#go:disabled{opacity:.4;cursor:not-allowed}
+#st{margin-top:14px;min-height:1.5em;color:var(--mut)}
+#st.ok{color:var(--ok)}#st.er{color:var(--er)}
+progress{width:100%;display:none;margin-top:6px}
+a.dl{display:none;margin-top:8px;text-align:center;padding:12px;border:2px solid var(--ac);border-radius:10px;color:var(--ac);text-decoration:none;font-weight:600}
+video{display:none;width:100%;margin-top:12px;border-radius:10px;background:#000}
+</style>
+</head>
+<body>
+<main>
+<h1>MP3 + Image → Video Studio</h1>
+<p class="s">GPU-rendered effects, audio copied bit-for-bit (never re-encoded). Everything stays on your device.</p>
+<div class="grid">
+  <label class="drop" id="dA"><span>🎵 Drop MP3</span><small>or click to choose</small><input id="fA" type="file" accept="audio/mpeg,.mp3" hidden></label>
+  <label class="drop" id="dI"><span>🖼️ Drop image</span><small>PNG, JPG, WebP…</small><input id="fI" type="file" accept="image/*" hidden></label>
+</div>
+<canvas id="pvw"></canvas>
+<h2>Preset</h2>
+<div class="chips" id="chips"></div>
+<h2>Options</h2>
+<div class="row">
+  <label>Intensity <input id="k" type="range" min="0.2" max="1.6" step="0.05" value="1"></label>
+  <label>Size <select id="q"><option value="4096">Original (up to 4K)</option><option value="1920" selected>1080p</option><option value="1280">720p (fastest)</option></select></label>
+  <label>Frame rate <select id="fps"><option value="12">12 fps (fastest)</option><option value="15">15 fps</option><option value="24" selected>24 fps</option><option value="30">30 fps</option></select></label>
+  <label>File size <select id="bpp"><option value="0.04">Tiny</option><option value="0.07" selected>Small</option><option value="0.13">Balanced</option><option value="0.25">High quality</option></select></label>
+</div>
+<button id="go" disabled>Create video</button>
+<progress id="pg" max="1" value="0"></progress>
+<div id="st"></div>
+<a class="dl" id="dl">⬇ Download MP4</a>
+<video id="pv" controls></video>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const st=(t,c='')=>{$('st').textContent=t;$('st').className=c};
+const yieldUI=()=>new Promise(r=>{const c=new MessageChannel();c.port1.onmessage=()=>r();c.port2.postMessage(0)});
+let audio=null,image=null,bmp=null,R=null,srcFull=null,preset=1,rendering=false,ready=false,out={W:0,H:0};
+
+const PRESETS=[['Static','🖼️'],['Film Grain','🎞️'],['Moving Grain','🌫️'],['VHS Tape','📼'],['Old Film','🕰️'],['Glitch','⚡'],['CRT TV','📺'],['Ken Burns','🎥'],['Dreamy Glow','✨'],['Liquid Wave','🌊']];
+PRESETS.forEach((p,i)=>{const b=document.createElement('button');b.className='chip'+(i===preset?' on':'');b.textContent=p[1]+' '+p[0];
+  b.onclick=()=>{preset=i;document.querySelectorAll('.chip').forEach((c,j)=>c.classList.toggle('on',j===i));$('k').disabled=i===0};$('chips').append(b)});
+
+/* ---------- WebGL effects renderer ---------- */
+const FS=`precision highp float;
+uniform sampler2D uTex;uniform vec2 uR;uniform float uT,uM,uK;varying vec2 v;
+float h(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+vec3 S(vec2 u){return texture2D(uTex,u).rgb;}
+float L(vec3 c){return dot(c,vec3(.299,.587,.114));}
+float sc(){return max(.5,uR.y/1080.);}
+float grain(float size,float rate){return h(floor(gl_FragCoord.xy/max(1.,size*sc()))+floor(uT*rate)*vec2(37.1,11.7));}
+float vig(vec2 u,float a){return 1.-dot(u-.5,u-.5)*a;}
+void main(){
+ vec2 u=v;vec3 c;float m=uM,k=uK,t=uT,f=floor(t*24.);
+ if(m<.5){c=S(u);}
+ else if(m<1.5){ // film grain
+  c=S(u);c+=(grain(1.3,24.)-.5)*.30*k*(1.-.5*L(c));c*=vig(u,.5);
+ }
+ else if(m<2.5){ // moving grain
+  vec2 p=gl_FragCoord.xy/(5.*sc());
+  float n=vn(p+vec2(t*6.,t*3.5))*.6+vn(p*2.7-vec2(t*7.,-t*4.))*.4;
+  c=S(u);c=c*(1.+(n-.5)*.55*k)+(grain(1.2,30.)-.5)*.14*k;c*=vig(u,.4);
+ }
+ else if(m<3.5){ // VHS
+  float y=u.y,fr=floor(t*30.);
+  float w=sin(y*30.+t*3.)*.0012+(h(vec2(floor(y*uR.y/3.),fr))-.5)*.0025;
+  float band=fract(t*.12+.3),inb=smoothstep(.06,0.,abs(y-band));
+  w+=inb*(sin(y*200.+t*20.)*.012+(h(vec2(y*50.,fr))-.5)*.02);
+  w+=smoothstep(.05,0.,y)*(h(vec2(fr,3.))-.5)*.08;
+  w*=k;vec2 q=vec2(u.x+w,u.y);float ca=.0035*k;
+  c=vec3(S(q+vec2(ca,0)).r,S(q).g,S(q-vec2(ca,0)).b);
+  c=mix(c,(S(q+vec2(.003,0))+S(q-vec2(.003,0)))*.5,.3);
+  c=mix(vec3(L(c)),c,1.25);
+  c*=.93+.07*sin(gl_FragCoord.y/sc()*2.);
+  c+=(grain(1.,60.)-.5)*.1*k+inb*(grain(2.,30.)-.4)*.5*k;
+  c=c*vec3(1.02,1.,1.06)*.92+.04;
+ }
+ else if(m<4.5){ // old film
+  vec2 j=(vec2(h(vec2(f,1.)),h(vec2(f,2.)))-.5)*.004*k;
+  vec2 q=(u-.5)/1.03+.5+j;c=S(q);
+  c=mix(c,vec3(L(c))*vec3(1.1,.95,.75),.85);
+  c*=1.+(h(vec2(f,7.))-.5)*.25*k+sin(t*3.)*.02;
+  for(int i=0;i<3;i++){float fi=float(i),sf=floor(t*10.);
+   float x=h(vec2(sf,fi+11.)),on=step(.6,h(vec2(sf,fi+31.)));
+   c+=on*smoothstep(.0015,0.,abs(u.x-x))*.5*(.5+vn(vec2(u.y*20.,fi+t)));}
+  vec2 g=gl_FragCoord.xy/(24.*sc()),cell=floor(g);
+  float r=h(cell+f*13.7);
+  if(r>.985){vec2 o=(vec2(h(cell+1.),h(cell+2.))-.5)*.6;float sp=smoothstep(.12,0.,length(fract(g)-.5-o));c=mix(c,vec3(r>.993?.05:.95),sp*.8);}
+  c+=(grain(1.4,24.)-.5)*.2*k;c*=vig(u,1.6);
+ }
+ else if(m<5.5){ // glitch
+  float ph=floor(t*10.),act=step(.72,h(vec2(ph,5.)));
+  float row=floor(u.y*(12.+30.*h(vec2(ph,9.))));
+  float d=(h(vec2(row,ph))-.5)*.25*act*k;vec2 q=vec2(u.x+d,u.y);
+  float sp=.012*act*k+.0015;
+  c=vec3(S(q+vec2(sp,0)).r,S(q).g,S(q-vec2(sp,0)).b);
+  if(act>0.&&h(vec2(row,ph+3.))>.93)c=1.-c;
+  c+=(grain(1.,24.)-.5)*.06;c*=.96+.04*sin(gl_FragCoord.y/sc()*2.);
+ }
+ else if(m<6.5){ // CRT
+  vec2 p=u*2.-1.;p*=1.+.12*dot(p.yx,p.yx)*k;vec2 q=p*.5+.5;
+  if(q.x<0.||q.x>1.||q.y<0.||q.y>1.){gl_FragColor=vec4(0,0,0,1);return;}
+  c=vec3(S(q+vec2(.0012,0)).r,S(q).g,S(q-vec2(.0012,0)).b);
+  float s=sc();
+  c*=(.82+.18*sin(gl_FragCoord.y*6.2832/max(2.,3.*s)))*(.86+.14*sin(gl_FragCoord.x*2.094/max(1.,s)+vec3(0.,2.094,4.188)))*1.18;
+  c+=.06*smoothstep(.15,0.,abs(fract(u.y-t*.15)-.5));
+  c*=1.+.03*sin(t*60.);c*=vig(q,1.3);c+=(grain(1.,60.)-.5)*.05;
+ }
+ else if(m<7.5){ // ken burns
+  float z=1.08+.1*k*(.5-.5*cos(t*.25));
+  vec2 pan=vec2(sin(t*.17),cos(t*.13))*.025*k;
+  c=S((u-.5)/z+.5+pan);c+=(grain(1.3,24.)-.5)*.03;
+ }
+ else if(m<8.5){ // dreamy glow
+  vec2 q=u+vec2(sin(t*.3+u.y*3.),cos(t*.25+u.x*3.))*.003*k;
+  c=S(q);vec3 b=vec3(0);vec2 as=vec2(uR.y/uR.x,1.);
+  for(int i=0;i<8;i++){float a=float(i)*.785398;vec2 d=vec2(cos(a),sin(a))*as;b+=S(q+d*.012)+S(q+d*.03);}
+  b/=16.;c+=max(b-.3,0.)*.9*k+(b-c)*.15;
+  vec2 lp=vec2(.5+.5*sin(t*.2),.5+.5*cos(t*.17));
+  c+=exp(-length(u-lp)*3.)*vec3(1.,.5,.3)*.25*k;c+=(grain(1.3,24.)-.5)*.04;
+ }
+ else { // liquid wave
+  vec2 q=u+vec2(sin(u.y*12.+t*1.5),cos(u.x*10.+t*1.2))*.006*k+vec2(sin(u.y*35.-t*2.),0.)*.0015*k;
+  float ca=.002*k;c=vec3(S(q+vec2(ca,0)).r,S(q).g,S(q-vec2(ca,0)).b);
+ }
+ gl_FragColor=vec4(clamp(c,0.,1.),1.);
+}`;
+function makeR(cv){
+  const gl=cv.getContext('webgl',{preserveDrawingBuffer:false,antialias:false,powerPreference:'high-performance'});
+  if(!gl)throw new Error('WebGL is not available.');
+  const mk=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s};
+  const pr=gl.createProgram();
+  gl.attachShader(pr,mk(gl.VERTEX_SHADER,'attribute vec2 p;varying vec2 v;void main(){v=p*.5+.5;gl_Position=vec4(p,0.,1.);}'));
+  gl.attachShader(pr,mk(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pr);gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const tex=gl.createTexture(),U=n=>gl.getUniformLocation(pr,n);
+  return{
+    set(src){cv.width=src.width;cv.height=src.height;gl.viewport(0,0,cv.width,cv.height);
+      gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+      for(const p of[gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,p,gl.LINEAR);
+      for(const p of[gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,p,gl.CLAMP_TO_EDGE);
+      gl.uniform1i(U('uTex'),0);gl.uniform2f(U('uR'),cv.width,cv.height)},
+    draw(m,t,k){gl.uniform1f(U('uM'),m);gl.uniform1f(U('uT'),t);gl.uniform1f(U('uK'),k);gl.drawArrays(gl.TRIANGLE_STRIP,0,4)}
+  };
+}
+
+/* ---------- inputs ---------- */
+function wire(zone,input,kind){
+  const set=async f=>{
+    if(!f)return;
+    if(kind==='a'){audio=f;zone.innerHTML=`<span>🎵</span><b>${f.name}</b><small>${(f.size/1048576).toFixed(2)} MB</small>`}
+    else{image=f;zone.innerHTML=`<img src="${URL.createObjectURL(f)}"><b>${f.name}</b>`;bmp=await createImageBitmap(f);setup()}
+    $('go').disabled=!(audio&&image);
+  };
+  input.onchange=()=>set(input.files[0]);
+  zone.ondragover=e=>{e.preventDefault();zone.classList.add('over')};
+  zone.ondragleave=()=>zone.classList.remove('over');
+  zone.ondrop=e=>{e.preventDefault();zone.classList.remove('over');set(e.dataTransfer.files[0])};
+}
+wire($('dA'),$('fA'),'a');wire($('dI'),$('fI'),'i');$('q').onchange=setup;
+
+function setup(){
+  if(!bmp)return;
+  try{
+    const lim=+$('q').value;
+    const s=Math.min(1,lim/Math.max(bmp.width,bmp.height),Math.sqrt(8294400/(bmp.width*bmp.height)));
+    const W=Math.max(2,Math.floor(bmp.width*s/2)*2),H=Math.max(2,Math.floor(bmp.height*s/2)*2);
+    const t=document.createElement('canvas');t.width=W;t.height=H;
+    const x=t.getContext('2d');x.imageSmoothingQuality='high';x.drawImage(bmp,0,0,W,H);
+    srcFull=t;
+    const ps=Math.min(1,960/Math.max(W,H)),p=document.createElement('canvas');
+    p.width=Math.max(2,Math.round(W*ps));p.height=Math.max(2,Math.round(H*ps));
+    const px=p.getContext('2d');px.imageSmoothingQuality='high';px.drawImage(t,0,0,p.width,p.height);
+    R=R||makeR($('pvw'));R.set(p);out={W,H};ready=true;$('pvw').style.display='block';
+  }catch(e){st('Error: '+e.message,'er')}
+}
+(function loop(){if(ready&&!rendering)R.draw(preset,performance.now()/1000,+$('k').value);requestAnimationFrame(loop)})();
+
+/* ---------- MP3 frame parser (passthrough) ---------- */
+function parseMp3(u){
+  let p=0;
+  if(u[0]==0x49&&u[1]==0x44&&u[2]==0x33){p=10+((u[6]&127)<<21|(u[7]&127)<<14|(u[8]&127)<<7|(u[9]&127));if(u[5]&16)p+=10}
+  const B1=[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320],B2=[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+  const S={3:[44100,48000,32000],2:[22050,24000,16000],0:[11025,12000,8000]};
+  const o8=new Uint8Array(u.length),sizes=[];let o=0,sr=0,ch=2,spf=1152;
+  while(p+4<=u.length){
+    if(u[p]!==0xFF||(u[p+1]&0xE0)!==0xE0){p++;continue}
+    const v=(u[p+1]>>3)&3,l=(u[p+1]>>1)&3,bi=u[p+2]>>4,si=(u[p+2]>>2)&3,pad=(u[p+2]>>1)&1;
+    if(v===1||l!==1||bi<1||bi>14||si>2){p++;continue}
+    const s=S[v][si],br=(v===3?B1:B2)[bi]*1000;
+    const size=(v===3?Math.floor(144*br/s):Math.floor(72*br/s))+pad;
+    if(p+size>u.length)break;
+    if(sizes.length&&s!==sr){p++;continue}
+    sr=s;ch=(u[p+3]>>6)===3?1:2;spf=v===3?1152:576;
+    o8.set(u.subarray(p,p+size),o);o+=size;sizes.push(size);p+=size;
+  }
+  if(!sizes.length)throw new Error('No valid MP3 frames found.');
+  return{data:o8.subarray(0,o),sizes,sr,ch,spf};
+}
+
+/* ---------- tiny MP4 writer ---------- */
+const enc=new TextEncoder();
+const u32=n=>new Uint8Array([n>>>24,n>>>16&255,n>>>8&255,n&255]);
+const u16=n=>new Uint8Array([n>>8&255,n&255]);
+const z=n=>new Uint8Array(n);
+const cat=a=>{let n=0;for(const x of a)n+=x.length;const r=new Uint8Array(n);let o=0;for(const x of a){r.set(x,o);o+=x.length}return r};
+const box=(t,...c)=>{const b=cat(c);return cat([u32(b.length+8),enc.encode(t),b])};
+const fb=(t,f,...c)=>box(t,u32(f),...c);
+const MATRIX=cat([u32(0x10000),z(12),u32(0x10000),z(12),u32(0x40000000)]);
+
+function buildMoov(o){
+  const {W,H,vN,vTs,vDelta,sync,vSizes,vMs,aMs,sr,ch,spf,avcC,aSizes,vOff,aOff}=o;
+  const N=aSizes.length;
+  const dinf=box('dinf',fb('dref',0,u32(1),fb('url ',1)));
+  const hdlr=(t,n)=>fb('hdlr',0,z(4),enc.encode(t),z(12),enc.encode(n+'\0'));
+  const mdhd=(ts,d)=>fb('mdhd',0,z(8),u32(ts),u32(d),u16(0x55c4),z(2));
+  const tkhd=(id,d,vol,w,h)=>fb('tkhd',3,z(8),u32(id),z(4),u32(d),z(8),z(4),u16(vol),z(2),MATRIX,u32(w<<16),u32(h<<16));
+  const avc1=box('avc1',z(6),u16(1),z(16),u16(W),u16(H),u32(0x480000),u32(0x480000),z(4),u16(1),z(32),u16(0x18),u16(0xffff),box('avcC',avcC));
+  const vstbl=box('stbl',fb('stsd',0,u32(1),avc1),fb('stts',0,u32(1),u32(vN),u32(vDelta)),
+    fb('stss',0,u32(sync.length),cat(sync.map(u32))),
+    fb('stsc',0,u32(1),u32(1),u32(vN),u32(1)),fb('stsz',0,u32(0),u32(vN),cat(vSizes.map(u32))),fb('stco',0,u32(1),u32(vOff)));
+  const vtrak=box('trak',tkhd(1,vMs,0,W,H),box('mdia',mdhd(vTs,vN*vDelta),hdlr('vide','Video'),box('minf',fb('vmhd',1,z(8)),dinf,vstbl)));
+  const dcd=cat([new Uint8Array([0x04,13,0x6B,0x15]),z(3),u32(0),u32(0)]);
+  const es=cat([new Uint8Array([0x03,21,0,0,0]),dcd,new Uint8Array([0x06,1,2])]);
+  const mp4a=box('mp4a',z(6),u16(1),z(8),u16(ch),u16(16),z(4),u32(sr<<16),fb('esds',0,es));
+  const astbl=box('stbl',fb('stsd',0,u32(1),mp4a),fb('stts',0,u32(1),u32(N),u32(spf)),
+    fb('stsc',0,u32(1),u32(1),u32(N),u32(1)),fb('stsz',0,u32(0),u32(N),cat(aSizes.map(u32))),fb('stco',0,u32(1),u32(aOff)));
+  const atrak=box('trak',tkhd(2,aMs,0x100,0,0),box('mdia',mdhd(sr,N*spf),hdlr('soun','Audio'),box('minf',fb('smhd',0,z(4)),dinf,astbl)));
+  const mvhd=fb('mvhd',0,z(8),u32(1000),u32(Math.max(vMs,aMs)),u32(0x10000),u16(0x100),z(10),MATRIX,z(24),u32(3));
+  return box('moov',mvhd,vtrak,atrak);
+}
+
+/* ---------- render ---------- */
+async function run(){
+  $('go').disabled=true;rendering=true;$('dl').style.display=$('pv').style.display='none';
+  const pg=$('pg');pg.style.display='block';pg.value=0;
+  const t0=performance.now();let ve=null;
+  try{
+    if(!('VideoEncoder' in window))throw new Error('This browser lacks WebCodecs. Use Chrome, Edge, or Safari 16.4+.');
+    st('Reading MP3…');
+    const mp3=parseMp3(new Uint8Array(await audio.arrayBuffer()));
+    const aMs=Math.round(mp3.sizes.length*mp3.spf/mp3.sr*1000);
+    const isStatic=preset===0,fps=isStatic?1:+$('fps').value;
+    const N=isStatic?1:Math.max(1,Math.round(aMs/1000*fps));
+    const {W,H}=out,k=+$('k').value;
+    const cv=typeof OffscreenCanvas!=='undefined'?new OffscreenCanvas(W,H):Object.assign(document.createElement('canvas'),{width:W,height:H});
+    const RX=makeR(cv);RX.set(srcFull);
+
+    const bitrate=isStatic?60e6:Math.round(Math.min(50e6,Math.max(1e6,W*H*fps*(+$('bpp').value))));
+    let cfg=null;
+    const big=W*H>2304000;
+    search:for(const hw of['prefer-hardware','no-preference'])
+      for(const codec of big?['avc1.640033']:['avc1.64002A','avc1.640033']){
+        const c={codec,width:W,height:H,bitrate,framerate:fps,latencyMode:isStatic?'quality':'realtime',bitrateMode:'variable',hardwareAcceleration:hw,avc:{format:'avc'}};
+        if((await VideoEncoder.isConfigSupported(c)).supported){cfg=c;break search}
+      }
+    if(!cfg)throw new Error('H.264 encoding at this size is not supported here. Try 720p.');
+
+    const chunks=[],vSizes=[],sync=[];let avcC=null,err=null;
+    ve=new VideoEncoder({
+      output:(c,m)=>{const b=new Uint8Array(c.byteLength);c.copyTo(b);chunks.push(b);vSizes.push(b.length);
+        if(c.type==='key')sync.push(vSizes.length);
+        if(m?.decoderConfig?.description&&!avcC)avcC=new Uint8Array(m.decoderConfig.description)},
+      error:e=>{err=e}
+    });
+    ve.configure(cfg);
+    const dur=Math.round(1e6/fps);
+    const tR=performance.now();
+    for(let i=0;i<N;i++){
+      if(err)throw err;
+      RX.draw(preset,i/fps,k);
+      const fr=new VideoFrame(cv,{timestamp:Math.round(i*1e6/fps),duration:isStatic?aMs*1000:dur});
+      ve.encode(fr,{keyFrame:i%(fps*4)===0});fr.close();
+      while(ve.encodeQueueSize>12)await new Promise(r=>ve.addEventListener('dequeue',r,{once:true}));
+      if(i%30===0){
+        pg.value=i/N;const el=(performance.now()-tR)/1000,rate=i/Math.max(el,.01);
+        st(`Rendering ${i+1}/${N} · ${rate.toFixed(0)} fps · ~${Math.ceil((N-i)/Math.max(rate,1))}s left · keep this tab in front`);
+        await yieldUI();
+      }
+    }
+    await ve.flush();ve.close();ve=null;
+    if(err)throw err;
+    if(!avcC||chunks.length!==N)throw new Error('Encoder produced incomplete output.');
+
+    st('Writing MP4…');
+    const vTs=isStatic?1000:fps*100,vDelta=isStatic?aMs:100;
+    const vMs=isStatic?aMs:Math.round(N/fps*1000);
+    const base={W,H,vN:N,vTs,vDelta,sync,vSizes,vMs,aMs,sr:mp3.sr,ch:mp3.ch,spf:mp3.spf,avcC,aSizes:mp3.sizes};
+    const ftyp=box('ftyp',enc.encode('isom'),u32(512),enc.encode('isomiso2avc1mp41'));
+    const moovLen=buildMoov({...base,vOff:0,aOff:0}).length;
+    const vTotal=vSizes.reduce((a,b)=>a+b,0),vOff=ftyp.length+moovLen+8,aOff=vOff+vTotal;
+    const moov=buildMoov({...base,vOff,aOff});
+    const hdr=cat([u32(8+vTotal+mp3.data.length),enc.encode('mdat')]);
+    const blob=new Blob([ftyp,moov,hdr,...chunks,mp3.data],{type:'video/mp4'});
+
+    const url=URL.createObjectURL(blob);
+    const a=$('dl');a.href=url;a.download=audio.name.replace(/\.[^.]+$/,'')+'.mp4';a.style.display='block';
+    const pv=$('pv');pv.src=url;pv.style.display='block';
+    st(`Done in ${((performance.now()-t0)/1000).toFixed(1)}s · ${W}×${H} · ${(blob.size/1048576).toFixed(1)} MB · audio untouched`,'ok');
+  }catch(e){console.error(e);st('Error: '+e.message,'er');try{ve&&ve.close()}catch{}}
+  pg.style.display='none';rendering=false;$('go').disabled=false;
+}
+$('go').onclick=run;
+</script>
+</body>
+</html>
